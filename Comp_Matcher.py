@@ -258,8 +258,13 @@ if subj_file and src_file:
                 # --- SUCCESS STATE ---
                 st.balloons() # Standard Streamlit Celebration
                 
-                # Reliable GIF (Checkmark)
-                st.image("https://i.gifer.com/7efs.gif", width=100) 
+                # Use a specific, smaller width for the "Live Feel" GIF
+                # This is a reliable confetti/success GIF
+                st.image(
+                    "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3RxeXQ4eXQ4eXQ4eXQ4eXQ4eXQ4eXQ4eXQ4eXQ4/l0HlHJGHe3yAMhdQY/giphy.gif", 
+                    width=300, # <-- Reduced Size Here
+                    caption="Processing Complete!"
+                )
                 
                 st.success(f"✅ Job Done! Processed {total_subj} subjects.")
                 
