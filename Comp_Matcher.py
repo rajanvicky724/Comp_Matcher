@@ -52,6 +52,7 @@ def find_comps(srow, src_df, config):
     smv = srow["Total Market value-2023"]
     srm = srow["GBA"]
     slat, slon = srow.get("lat"), srow.get("lon")
+    sClass = str(srow.get("Class", "")).lower().strip() # For Hotels
 
     if pd.isna(sVPU) or sVPU == 0: return []
 
@@ -60,51 +61,72 @@ def find_comps(srow, src_df, config):
     # Unpack config
     max_dist = config['max_dist']
     comp_must_be_lower = config['comp_lower']
-    val_tol = config['val_tol'] / 100.0  # Convert 50 -> 0.50
+    val_tol = config['val_tol'] / 100.0
     gba_tol = config['gba_tol'] / 100.0
+    prop_type = config['prop_type']
 
     for _, crow in src_df.iterrows():
         cVPU = crow["VPU"]
         cmv = crow["Total Market value-2023"]
         crm = crow["GBA"]
+        cClass = str(crow.get("Class", "")).lower().strip()
         
-        # --- RULE: Comp Value Lower? ---
+        # --- RULE 1: Property Type (Hotel vs Standard) ---
+        if prop_type == "Hotel":
+            # If Hotel, classes must roughly match (e.g. contains "economy")
+            if sClass and cClass and (sClass not in cClass and cClass not in sClass):
+                continue
+        # If Standard, we ignore Class entirely.
+
+        # --- RULE 2: Comp Value Lower? ---
         if pd.isna(cVPU): continue
         if comp_must_be_lower and cVPU > sVPU: continue
         
-        # --- RULE: Value Tolerance ---
+        # --- RULE 3: Value Tolerance ---
         gap_pct = (sVPU - cVPU) / sVPU
         if abs(gap_pct) > val_tol: continue
 
-        # --- RULE: GBA Tolerance ---
+        # --- RULE 4: GBA Tolerance ---
         if srm > 0:
             if abs(crm - srm) / srm > gba_tol: continue
 
-        # --- RULE: Distance ---
+        # --- RULE 5: Distance Calculation ---
         clat, clon = crow.get("lat"), crow.get("lon")
         dist_miles = 999
         if pd.notna(slat) and pd.notna(slon) and pd.notna(clat) and pd.notna(clon):
             dist_miles = haversine(slat, slon, clat, clon)
         
-        if config['use_dist_filter'] and dist_miles > max_dist:
-            continue
-
-        # --- MATCH TYPE ---
+        # --- RULE 6: Match Logic & Priority ---
+        # Priority 1: Within Radius
+        # Priority 2: Same Zip
+        # Priority 3: Same City
+        # Priority 4: Everything else (only if Distance Filter is OFF)
+        
         match_type = None
         priority = 99
         
-        if dist_miles <= max_dist:
+        is_radius_match = dist_miles <= max_dist
+        is_zip_match = str(srow["Property Zip Code"]) == str(crow["Property Zip Code"])
+        is_city_match = str(srow["Property City"]).strip().lower() == str(crow["Property City"]).strip().lower()
+
+        if is_radius_match:
             match_type = f"Within {max_dist} Miles"
             priority = 1
-        elif str(srow["Property Zip Code"]) == str(crow["Property Zip Code"]):
+        elif is_zip_match:
             match_type = "Same ZIP"
             priority = 2
-        elif str(srow["Property City"]).strip().lower() == str(crow["Property City"]).strip().lower():
+        elif is_city_match:
             match_type = "Same City"
             priority = 3
         else:
-            continue 
-            
+            # If we enforce distance, skip this.
+            # If we DO NOT enforce distance, we allow it as a low priority match.
+            if config['use_dist_filter']:
+                continue 
+            else:
+                match_type = "Fallback (Location mismatch)"
+                priority = 4
+
         candidates.append({
             "row": crow,
             "priority": priority,
@@ -114,9 +136,9 @@ def find_comps(srow, src_df, config):
         })
 
     # --- SORTING ---
-    # 1. Match Quality (Priority)
-    # 2. Biggest Price Gap (Descending) -> -x['vpu_gap']
-    # 3. Distance (Ascending)
+    # 1. Match Priority (Radius > Zip > City > Fallback)
+    # 2. Biggest Price Gap (Descending)
+    # 3. Distance (Closer is better)
     candidates.sort(key=lambda x: (x['priority'], -x['vpu_gap'], x['dist']))
 
     final_comps = []
@@ -143,9 +165,13 @@ st.set_page_config(page_title="Comp Matcher", layout="wide")
 
 # --- SIDEBAR CONFIG ---
 st.sidebar.header("⚙️ Configuration")
+
+st.sidebar.markdown("### 🏨 Property Type")
+prop_type = st.sidebar.radio("Select Type:", ["Standard/Residential", "Hotel"])
+
 st.sidebar.markdown("### 📍 Location Rules")
-use_dist = st.sidebar.checkbox("Filter by Distance?", value=True)
-max_dist = st.sidebar.number_input("Max Distance (Miles)", value=15.0, step=1.0)
+use_dist = st.sidebar.checkbox("Strict Distance Filter?", value=True, help="If unchecked, will fallback to ZIP/City matches even if far away.")
+max_dist = st.sidebar.number_input("Max Radius (Miles)", value=15.0, step=1.0)
 
 st.sidebar.markdown("### 💰 Valuation Rules")
 comp_lower = st.sidebar.checkbox("Comp Value MUST be lower?", value=True)
@@ -156,6 +182,7 @@ gba_tol = st.sidebar.number_input("GBA Tolerance %", value=50.0, step=5.0)
 max_comps_count = st.sidebar.number_input("Max Comps to Find", value=10, step=1, min_value=1, max_value=20)
 
 config = {
+    'prop_type': prop_type.split("/")[0], # "Standard" or "Hotel"
     'use_dist_filter': use_dist,
     'max_dist': max_dist,
     'comp_lower': comp_lower,
@@ -166,7 +193,7 @@ config = {
 
 # --- HEADER ---
 st.title("🏢 Property Tax Comp Matcher")
-st.markdown("Automated comparison based on **VPU Gap** and **Location**.")
+st.markdown(f"Mode: **{config['prop_type']}** | Priority: **Gap & Location**")
 
 # --- FILE UPLOADS ---
 col1, col2 = st.columns(2)
@@ -182,10 +209,11 @@ with col2:
 if subj_file and src_file:
     if st.button("🚀 Run Matching Process", type="primary"):
         
-        # Placeholder for status
+        st.write("---")
         status_text = st.empty()
+        prog_bar = st.progress(0)
         
-        with st.spinner("Reading files and processing matches..."):
+        with st.spinner("Processing..."):
             try:
                 # Load Data
                 df_subj = pd.read_excel(subj_file)
@@ -221,7 +249,6 @@ if subj_file and src_file:
                 ]
 
                 results = []
-                prog_bar = st.progress(0)
                 total_subj = len(df_subj)
 
                 for i, (_, srow) in enumerate(df_subj.iterrows()):
@@ -255,15 +282,16 @@ if subj_file and src_file:
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_final.to_excel(writer, index=False)
                 
-                # --- SUCCESS STATE ---
-                st.balloons() # Standard Streamlit Celebration
-                
-                # Use a specific, smaller width for the "Live Feel" GIF
-                # This is a reliable confetti/success GIF
-                st.image(
-                    "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3RxeXQ4eXQ4eXQ4eXQ4eXQ4eXQ4eXQ4eXQ4eXQ4/l0HlHJGHe3yAMhdQY/giphy.gif", 
-                    width=300, # <-- Reduced Size Here
-                    caption="Processing Complete!"
+                # --- SUCCESS ANIMATION ---
+                st.balloons()
+                # Permanent, reliable GIF (Confetti Checkmark)
+                st.markdown(
+                    """
+                    <div style="display: flex; justify-content: center;">
+                        <img src="https://media.giphy.com/media/26u4lOMA8JKSnL9Uk/giphy.gif" width="300" />
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
                 )
                 
                 st.success(f"✅ Job Done! Processed {total_subj} subjects.")
