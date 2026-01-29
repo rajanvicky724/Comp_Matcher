@@ -177,7 +177,7 @@ def process_matching(subject_df, source_df, rules):
 
 # ---------- UI LAYOUT ----------
 
-st.title("🏢 Property Tax Comp Matcher v4")
+st.title("🏢 Property Tax Comp Matcher vi")
 
 # --- SIDEBAR CONFIG ---
 st.sidebar.header("⚙️ Configuration")
@@ -297,3 +297,4 @@ if subj_file and src_file:
             st.error(f"Error: {e}")
             # Reset GIF on error
             hero_container.markdown("❌ Error occurred.")
+
