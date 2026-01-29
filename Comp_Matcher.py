@@ -9,65 +9,62 @@ st.set_page_config(page_title="Comp Matcher Ultimate", layout="wide")
 def set_custom_style():
     st.markdown("""
         <style>
-        /* 1. Main Background Gradient */
+        /* 1. Reset Main Background to Clean White/Light Grey */
         .stApp {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: white;
+            background-color: #f8f9fa;
+            color: #333333;
         }
 
-        /* 2. Sidebar styling */
+        /* 2. Sidebar - Dark Professional Grey */
         section[data-testid="stSidebar"] {
-            background-color: #111827;
-            border-right: 1px solid #374151;
+            background-color: #ffffff;
+            border-right: 1px solid #e5e7eb;
         }
         
-        /* 3. Cards for Upload Sections */
-        .css-1r6slb0, .stFileUploader {
-            background-color: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        /* 3. Headers - Dark & Sharp */
+        h1, h2, h3 {
+            color: #111827 !important;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
 
-        /* 4. Rocket Button (Big & Glowing) */
+        /* 4. Upload Cards - White Box with Shadow */
+        .stFileUploader {
+            background-color: #ffffff;
+            border: 1px dashed #cbd5e1;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+
+        /* 5. Primary Button - Professional Blue */
         div.stButton > button {
             width: 100%;
-            background: linear-gradient(90deg, #FF512F 0%, #DD2476 100%);
+            background-color: #2563eb; /* Royal Blue */
             color: white;
-            font-size: 20px;
-            font-weight: bold;
-            padding: 15px 0px;
+            border-radius: 6px;
+            padding: 12px 24px;
+            font-weight: 600;
             border: none;
-            border-radius: 12px;
-            transition: transform 0.2s, box-shadow 0.2s;
+            transition: all 0.2s;
         }
         div.stButton > button:hover {
-            transform: scale(1.02);
-            box-shadow: 0 0 20px rgba(221, 36, 118, 0.6);
+            background-color: #1d4ed8;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
             color: white;
         }
 
-        /* 5. Headers */
-        h1 {
-            text-align: center;
-            font-family: 'Helvetica Neue', sans-serif;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-            margin-bottom: 30px;
+        /* 6. Info Box - Clean Blue Tint */
+        .stAlert {
+            background-color: #eff6ff;
+            border: 1px solid #bfdbfe;
+            color: #1e40af;
         }
         
-        /* 6. Info Box Customization */
-        .stAlert {
-            background-color: rgba(0, 0, 0, 0.3);
-            border: 1px solid #3b82f6;
-            color: #e5e7eb;
-        }
+        /* 7. Hide the default Streamlit menu for a cleaner look */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
         </style>
     """, unsafe_allow_html=True)
-
-# ... inside your main code ...
-st.set_page_config(page_title="Comp Matcher Ultimate", layout="wide")
-set_custom_style()  # <--- CALL IT HERE!
 
 def haversine(lat1, lon1, lat2, lon2):
     try:
@@ -348,4 +345,5 @@ if subj_file and src_file:
                 
             except Exception as e:
                 st.error(f"Error: {e}")
+
 
