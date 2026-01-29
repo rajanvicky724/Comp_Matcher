@@ -1,243 +1,288 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import math
 import io
 
-# Set page to wide mode for better data viewing
-st.set_page_config(page_title="Comp Matcher Pro", layout="wide")
+st.set_page_config(page_title="Comp Matcher Ultimate", layout="wide")
 
 # ---------- HELPER FUNCTIONS ----------
 
 def haversine(lat1, lon1, lat2, lon2):
-    """Calculate distance in miles between two lat/lon points"""
     try:
-        # Vectorized calculation for Pandas Series if passed, or single floats
-        # This handles both cases automatically
         lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
         dlon = lon2 - lon1
         dlat = lat2 - lat1
         a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
         c = 2 * np.arcsin(np.sqrt(a))
-        return c * 3956  # Earth radius in miles
+        return c * 3956 
     except:
         return 999999
 
-def get_prefix_6(val):
-    if pd.isna(val): return ""
-    clean = str(val).lower().replace(" ", "").replace(".", "").replace("-", "").replace(",", "").replace("/", "")
-    return clean[:6]
+def norm_class(v):
+    try: return int(float(v))
+    except: return np.nan
 
-def check_uniqueness(subject, candidate, chosen_comps):
-    """Ensure candidate is not a duplicate of subject or already chosen comps"""
+def class_ok(subj_c, comp_c):
+    """Hotel Class Logic: Allows slight variance (+/- 1 star typically)"""
+    if pd.isna(subj_c) or pd.isna(comp_c): return False
+    subj_c = int(subj_c)
+    comp_c = int(comp_c)
+    if subj_c == 8: return comp_c == 8
+    if comp_c == 8: return False
+    # Example logic: Allow +/- 1 or specific grouping
+    if subj_c == 7: return comp_c in (6, 7)
+    if subj_c == 6: return comp_c in (5, 6, 7)
+    return (comp_c >= subj_c - 1) and (comp_c <= subj_c + 2)
+
+def check_uniqueness(subject, candidate, chosen_comps, rules):
+    """Ensure candidate is unique based on Account No and Project Name"""
     def norm(x): return str(x).strip().lower()
     
-    # 1. Check Account Number
-    s_acc = norm(subject.get("Property Account No", ""))
-    c_acc = norm(candidate.get("Property Account No", ""))
-    if s_acc == c_acc: return False
+    # 1. Basic Account Number Check
+    if norm(subject.get("Property Account No", "")) == norm(candidate.get("Property Account No", "")): return False
     
     # Check against already chosen comps
     for chosen in chosen_comps:
-        if norm(chosen.get("Property Account No", "")) == c_acc: return False
-
-    # (You can add your Name/Address fuzzy checks here if needed, keeping it simple for speed)
+        if norm(chosen.get("Property Account No", "")) == norm(candidate.get("Property Account No", "")): return False
+        
+        # 2. HOTEL RULE: Unique Project Name (Diversity)
+        if rules['is_hotel'] and 'Project Name' in candidate and 'Project Name' in chosen:
+            p1 = norm(chosen.get('Project Name', 'a'))
+            p2 = norm(candidate.get('Project Name', 'b'))
+            if p1 and p2 and p1 == p2:
+                return False
     return True
 
 # ---------- CORE LOGIC ----------
 
 def process_matching(subject_df, source_df, rules):
     results = []
-    
-    # Progress bar logic
     progress_bar = st.progress(0)
     status_text = st.empty()
-    total_subjects = len(subject_df)
+    total = len(subject_df)
     
-    # Pre-calculate source coordinates for faster distance calc
-    if rules['use_distance']:
+    # Pre-calculate source coordinates
+    if 'lat' in source_df.columns and 'lon' in source_df.columns:
         src_lats = np.radians(source_df['lat'])
         src_lons = np.radians(source_df['lon'])
-
+    
     for i, (_, srow) in enumerate(subject_df.iterrows()):
-        # Update UI every 5 items to keep it responsive
-        if i % 5 == 0:
-            progress_bar.progress((i + 1) / total_subjects)
-            status_text.text(f"Processing Subject {i+1} of {total_subjects}...")
-            
-        # --- FILTERS ---
-        # 1. Filter Source by VPU (Must be lower than Subject?)
-        # Only keep candidates with LOWER VPU if that rule is implied, 
-        # or just strictly check the tolerance gap.
-        
-        # Start with all source data
-        candidates = source_df.copy()
-        
-        # Rule: Comp VPU must be valid
-        candidates = candidates.dropna(subset=['VPU'])
-        
-        # Rule: Comp VPU must be LOWER than Subject VPU (Standard Appeal Strategy)
-        if rules['comp_vpu_lower']:
-            candidates = candidates[candidates['VPU'] < srow['VPU']]
-        
-        # Rule: VPU Tolerance (e.g., within 50%)
-        # Calculate percent difference
-        candidates['vpu_diff_pct'] = (srow['VPU'] - candidates['VPU']) / srow['VPU']
-        if rules['vpu_tolerance'] > 0:
-            candidates = candidates[candidates['vpu_diff_pct'] <= (rules['vpu_tolerance'] / 100.0)]
-            
-        # Rule: Market Value Tolerance
-        if rules['mv_tolerance'] > 0:
-            pct_diff = abs(candidates['Total Market value-2023'] - srow['Total Market value-2023']) / srow['Total Market value-2023']
-            candidates = candidates[pct_diff <= (rules['mv_tolerance'] / 100.0)]
-            
-        # Rule: GBA Tolerance
-        if rules['gba_tolerance'] > 0:
-            pct_diff = abs(candidates['GBA'] - srow['GBA']) / srow['GBA']
-            candidates = candidates[pct_diff <= (rules['gba_tolerance'] / 100.0)]
+        if i % 5 == 0: 
+            progress_bar.progress((i + 1) / total)
+            status_text.text(f"Processing {i+1}/{total}...")
 
-        # --- DISTANCE CALCULATION (Vectorized for Speed) ---
-        if rules['use_distance'] and pd.notna(srow['lat']) and pd.notna(srow['lon']):
-            # Vectorized Haversine
+        candidates = source_df.copy()
+
+        # --- 1. HOTEL SPECIFIC RULES ---
+        if rules['is_hotel']:
+            # Hotel Class Rule
+            if rules['use_hotel_class'] and 'Class_Num' in srow and 'Class_Num' in candidates.columns:
+                # Use apply to check row-by-row or filter? For speed, we filter.
+                # Since class_ok logic is complex, we might iterate or simple filter.
+                # Simplified filter for speed: Must be within +/- 1
+                s_cls = srow['Class_Num']
+                if pd.notna(s_cls):
+                    # Filter candidates based on custom class logic
+                    candidates = candidates[candidates['Class_Num'].apply(lambda c: class_ok(s_cls, c))]
+            
+            # Unit Metric: VPR (Value Per Room)
+            val_col = 'VPR'
+            size_col = 'Rooms'
+        else:
+            # Standard Property Rules
+            # Unit Metric: VPU (Value Per Unit) or GBA
+            val_col = 'VPU'
+            size_col = 'GBA'
+
+        # --- 2. VALUATION RULES ---
+        # Ensure metric exists
+        if val_col in candidates.columns and val_col in srow:
+            candidates = candidates.dropna(subset=[val_col])
+            s_val = srow[val_col]
+            
+            if pd.notna(s_val):
+                # Rule: Comp Value Lower?
+                if rules['comp_val_lower']:
+                    candidates = candidates[candidates[val_col] < s_val]
+
+                # Rule: Value Tolerance
+                candidates['val_diff_pct'] = (s_val - candidates[val_col]) / s_val
+                if rules['val_tolerance'] > 0:
+                     # Allow +/- tolerance? Or just gap? Logic implies "Gap" for appeals.
+                     # Using absolute diff for general match, or specific direction?
+                     # Your original code used: (sVPR - cVPR) / sVPR <= 0.50 check (which is directional)
+                     candidates = candidates[candidates['val_diff_pct'] <= (rules['val_tolerance']/100)]
+        
+        # Rule: Size Tolerance (Rooms or GBA)
+        if size_col in candidates.columns and size_col in srow:
+             s_size = srow[size_col]
+             if pd.notna(s_size) and rules['size_tolerance'] > 0:
+                 candidates['size_diff'] = abs(candidates[size_col] - s_size) / s_size
+                 candidates = candidates[candidates['size_diff'] <= (rules['size_tolerance']/100)]
+
+        # --- 3. DISTANCE CALCULATION ---
+        if pd.notna(srow.get('lat')) and pd.notna(srow.get('lon')) and 'lat' in candidates.columns:
             slat_rad = np.radians(srow['lat'])
             slon_rad = np.radians(srow['lon'])
-            
             dlon = src_lons - slon_rad
             dlat = src_lats - slat_rad
             a = np.sin(dlat/2)**2 + np.cos(slat_rad) * np.cos(src_lats) * np.sin(dlon/2)**2
             c = 2 * np.arcsin(np.sqrt(a))
             candidates['calc_dist'] = c * 3956
-            
-            # Filter by Max Distance
-            candidates = candidates[candidates['calc_dist'] <= rules['max_distance']]
         else:
             candidates['calc_dist'] = 999.0
 
-        # --- RANKING / MATCH TYPE ---
-        # Assign Match Type
+        # --- 4. LOCATION FILTERING ---
+        if rules['filter_by_dist']:
+             candidates = candidates[candidates['calc_dist'] <= rules['max_distance']]
+        
+        # --- 5. WATERFALL MATCH TYPING ---
         candidates['Match_Type'] = "Generic"
-        candidates.loc[candidates['calc_dist'] <= 15, 'Match_Type'] = "Distance Match"
+        candidates['priority_score'] = 4
         
-        # (Optional: Add ZIP/City logic back if needed, but Distance usually covers it)
+        # City Match
+        s_city = str(srow.get('Property City', '')).strip().lower()
+        if s_city:
+            mask_city = candidates['Property City'].astype(str).str.strip().str.lower() == s_city
+            candidates.loc[mask_city, 'Match_Type'] = "Same City"
+            candidates.loc[mask_city, 'priority_score'] = 3
+            
+        # Zip Match
+        s_zip = str(srow.get('Property Zip Code', '')).strip()
+        if s_zip:
+            mask_zip = candidates['Property Zip Code'].astype(str).str.strip() == s_zip
+            candidates.loc[mask_zip, 'Match_Type'] = "Same ZIP"
+            candidates.loc[mask_zip, 'priority_score'] = 2
+            
+        # Distance Match
+        mask_dist = candidates['calc_dist'] <= rules['max_distance']
+        candidates.loc[mask_dist, 'Match_Type'] = "Distance Match"
+        candidates.loc[mask_dist, 'priority_score'] = 1
+
+        # --- 6. SORTING & SELECTION ---
+        # Sort by: Priority (Loc) -> Value Gap (High) -> Distance (Low)
+        # Note: If 'val_diff_pct' is missing, fill with 0
+        if 'val_diff_pct' in candidates.columns:
+            candidates = candidates.sort_values(
+                by=['priority_score', 'val_diff_pct', 'calc_dist'], 
+                ascending=[True, False, True]
+            )
+        else:
+            candidates = candidates.sort_values(by=['priority_score', 'calc_dist'], ascending=[True, True])
         
-        # Sort Candidates
-        # 1. Best VPU Gap (Higher is better for appeals) -> Ascending False
-        # 2. Closest Distance -> Ascending True
-        candidates = candidates.sort_values(by=['vpu_diff_pct', 'calc_dist'], ascending=[False, True])
-        
-        # Select Top N unique comps
         chosen_comps = []
         for _, crow in candidates.iterrows():
             if len(chosen_comps) >= rules['max_comps']: break
-            
-            if check_uniqueness(srow, crow, chosen_comps):
-                crow_dict = crow.to_dict()
-                chosen_comps.append(crow_dict)
+            if check_uniqueness(srow, crow.to_dict(), chosen_comps, rules):
+                chosen_comps.append(crow.to_dict())
 
-        # --- BUILD OUTPUT ROW ---
+        # --- 7. OUTPUT ---
         out_row = srow.to_dict()
-        # Rename Subject keys to differentiate? (Optional, based on your output format)
-        # Here we just add Comp columns
-        
         for k, comp in enumerate(chosen_comps):
             prefix = f"Comp{k+1}_"
             for col, val in comp.items():
-                if col in rules['output_columns']: # Only save specific columns to keep file small
+                if col in rules['output_columns']:
                     out_row[f"{prefix}{col}"] = val
-            
             out_row[f"{prefix}Dist"] = comp.get('calc_dist', 999)
             out_row[f"{prefix}MatchMethod"] = comp.get('Match_Type', "N/A")
-
+            
         results.append(out_row)
 
     progress_bar.progress(1.0)
-    status_text.text("✅ Processing Complete!")
     return pd.DataFrame(results)
-
 
 # ---------- UI LAYOUT ----------
 
-st.title("🏡 Property Tax Comp Matcher")
+st.title("🏢 Property Tax Comp Matcher v3")
 
-# --- SIDEBAR: RULES CONFIGURATION ---
-st.sidebar.header("⚙️ Matching Rules")
+# --- SIDEBAR CONFIG ---
+st.sidebar.header("⚙️ Configuration")
 
-# 1. Max Comps
-rule_max_comps = st.sidebar.number_input("Max Comps per Subject", min_value=1, max_value=20, value=10)
+# 1. Property Type
+prop_type = st.sidebar.radio("Property Type", ["Hotel", "Standard/Other"])
+is_hotel = (prop_type == "Hotel")
 
-# 2. Distance Rule
+# 2. Location Rules
 st.sidebar.subheader("📍 Location Rules")
-use_distance = st.sidebar.checkbox("Filter by Distance (Lat/Lon)", value=True)
-max_dist_val = 25.0
-if use_distance:
-    max_dist_val = st.sidebar.slider("Max Distance (Miles)", 1.0, 100.0, 15.0)
+filter_dist = st.sidebar.checkbox("Filter by Distance?", value=True)
+max_dist = st.sidebar.number_input("Max Distance (Miles)", value=15.0)
 
-# 3. VPU Rules
+# 3. Valuation Rules
 st.sidebar.subheader("💰 Valuation Rules")
-comp_vpu_lower = st.sidebar.checkbox("Comp VPU MUST be lower than Subject", value=True)
-vpu_tol = st.sidebar.number_input("VPU Tolerance % (0 to disable)", value=50)
+comp_val_lower = st.sidebar.checkbox("Comp Value MUST be lower?", value=True, help="Standard appeal logic: find cheaper comps.")
+val_tol = st.sidebar.number_input("Value Tolerance % (Gap)", value=50.0)
 
-# 4. Property Specs Rules
-st.sidebar.subheader("building Specs Rules")
-mv_tol = st.sidebar.number_input("Market Value Tolerance % (0 to disable)", value=50)
-gba_tol = st.sidebar.number_input("GBA Tolerance % (0 to disable)", value=50)
+# 4. Property Specific Rules
+st.sidebar.subheader("🏗️ Property Specs")
+if is_hotel:
+    use_class = st.sidebar.checkbox("Enforce Hotel Class Match?", value=True)
+    size_tol = st.sidebar.number_input("Room Count Tolerance %", value=50.0)
+    metric_label = "VPR (Value Per Room)"
+else:
+    use_class = False
+    size_tol = st.sidebar.number_input("GBA Tolerance %", value=50.0)
+    metric_label = "VPU (Value Per Unit)"
 
-# Pack rules into a dictionary
+max_comps = st.sidebar.number_input("Max Comps to Find", value=3)
+
+# Define Output Columns
+if is_hotel:
+    out_cols = ["Property Account No", "Hotel Name", "Rooms", "VPR", "Hotel Class", "Property Address", "Owner Name/ LLC Name", "Project Name"]
+else:
+    out_cols = ["Property Account No", "Property Address", "VPU", "GBA", "Total Market value-2023", "Owner Name/ LLC Name"]
+
 RULES = {
-    'max_comps': rule_max_comps,
-    'use_distance': use_distance,
-    'max_distance': max_dist_val,
-    'comp_vpu_lower': comp_vpu_lower,
-    'vpu_tolerance': vpu_tol,
-    'mv_tolerance': mv_tol,
-    'gba_tolerance': gba_tol,
-    # Define which columns you want in the final Excel for the comps
-    'output_columns': ["Property Account No", "Property Address", "VPU", "Total Market value-2023", "GBA", "Owner Name/ LLC Name"]
+    'is_hotel': is_hotel,
+    'use_hotel_class': use_class,
+    'filter_by_dist': filter_dist,
+    'max_distance': max_dist,
+    'comp_val_lower': comp_val_lower,
+    'val_tolerance': val_tol,
+    'size_tolerance': size_tol,
+    'max_comps': max_comps,
+    'output_columns': out_cols
 }
 
-# --- FILE UPLOAD SECTION ---
-col1, col2 = st.columns(2)
-with col1:
-    subj_file = st.file_uploader("📂 Upload SUBJECT File (Excel)", type=["xlsx"])
-with col2:
-    src_file = st.file_uploader("📂 Upload SOURCE/COMPS File (Excel)", type=["xlsx"])
+st.info(f"Mode: **{prop_type}**. Matching using **{metric_label}**.")
+
+# --- UPLOAD ---
+c1, c2 = st.columns(2)
+subj_file = c1.file_uploader("Upload SUBJECTS", type=["xlsx"])
+src_file = c2.file_uploader("Upload DATA SOURCE", type=["xlsx"])
 
 if subj_file and src_file:
-    if st.button("🚀 Start Matching Process"):
-        try:
-            # Load Data
-            df_subj = pd.read_excel(subj_file)
-            df_src = pd.read_excel(src_file)
-            
-            st.write(f"Loaded {len(df_subj)} Subjects and {len(df_src)} Potential Comps.")
-            
-            # --- DATA CLEANING (Essential!) ---
-            # Ensure VPU/Lat/Lon are numeric
-            cols_to_numeric = ['VPU', 'Total Market value-2023', 'GBA', 'lat', 'lon']
-            for col in cols_to_numeric:
-                if col in df_subj.columns:
-                    df_subj[col] = pd.to_numeric(df_subj[col], errors='coerce')
-                if col in df_src.columns:
-                    df_src[col] = pd.to_numeric(df_src[col], errors='coerce')
+    if st.button("🚀 Start Matching"):
+        with st.spinner("Crunching numbers..."):
+            try:
+                df_subj = pd.read_excel(subj_file)
+                df_src = pd.read_excel(src_file)
+                
+                # PRE-PROCESSING (Standardize Names)
+                # Map user column names if needed, or assume standard names
+                # Hotel Mode specific renaming
+                if is_hotel:
+                    # Try to rename 'Hotel class values' to 'Class_Num' if it exists
+                    if 'Hotel class values' in df_subj.columns: df_subj['Class_Num'] = df_subj['Hotel class values'].apply(norm_class)
+                    if 'Hotel class values' in df_src.columns: df_src['Class_Num'] = df_src['Hotel class values'].apply(norm_class)
+                
+                # Numeric Conversions
+                cols_num = ['VPR', 'VPU', 'Rooms', 'GBA', 'lat', 'lon', 'Market Value-2023', 'Total Market value-2023']
+                for df in [df_subj, df_src]:
+                    for c in cols_num:
+                        if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
+                    # Fix longitude
+                    if 'lon' in df.columns: df['lon'] = df['lon'].apply(lambda x: -abs(x) if pd.notna(x) else x)
 
-            # Run Processing
-            result_df = process_matching(df_subj, df_src, RULES)
-            
-            # Show Preview
-            st.subheader("Results Preview")
-            st.dataframe(result_df.head())
-            
-            # Download Button
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                result_df.to_excel(writer, index=False)
-            
-            st.download_button(
-                label="📥 Download Results (Excel)",
-                data=buffer,
-                file_name="Automated_Comp_Results.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
+                result = process_matching(df_subj, df_src, RULES)
+                
+                st.success("Done!")
+                st.dataframe(result.head())
+                
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    result.to_excel(writer, index=False)
+                    
+                st.download_button("📥 Download Results", buffer, "Comp_Results.xlsx")
+                
+            except Exception as e:
+                st.error(f"Error: {e}")
