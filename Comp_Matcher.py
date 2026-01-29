@@ -1,300 +1,274 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import math
 import io
+import time
 
-# ---------- PAGE CONFIG & STYLING ----------
-st.set_page_config(page_title="Comp Matcher Pro", layout="wide", page_icon="🏢")
-
-def set_custom_style():
-    st.markdown("""
-        <style>
-        /* Main Background - Clean White */
-        .stApp { background-color: #f8f9fa; color: #333333; }
-        
-        /* Sidebar - Professional Grey */
-        section[data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #e5e7eb; }
-        
-        /* Headers */
-        h1, h2, h3 { color: #111827 !important; font-family: 'Segoe UI', sans-serif; }
-
-        /* Upload Cards */
-        .stFileUploader {
-            background-color: #ffffff; border: 1px dashed #cbd5e1;
-            border-radius: 8px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
-        }
-
-        /* Primary Button */
-        div.stButton > button {
-            width: 100%; background-color: #2563eb; color: white;
-            border-radius: 6px; padding: 12px 24px; font-weight: 600; border: none;
-            transition: all 0.2s;
-        }
-        div.stButton > button:hover { background-color: #1d4ed8; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2); }
-        
-        /* Hide Default Menu */
-        #MainMenu {visibility: hidden;} footer {visibility: hidden;}
-        </style>
-    """, unsafe_allow_html=True)
-
-set_custom_style()
-
-# ---------- HELPER FUNCTIONS ----------
+# ==========================================
+# 1. HELPER FUNCTIONS
+# ==========================================
 
 def haversine(lat1, lon1, lat2, lon2):
+    """Calculates distance in miles between two lat/lon points."""
     try:
-        lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
-        dlon = lon2 - lon1
-        dlat = lat2 - lat1
-        a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
-        c = 2 * np.arcsin(np.sqrt(a))
-        return c * 3956 
+        lat1, lon1, lat2, lon2 = map(float, [lat1, lon1, lat2, lon2])
+        lon1, lat1, lon2, lat2 = map(math.radians, [lon1, lat1, lon2, lat2])
+        dlon = lon2 - lon1 
+        dlat = lat2 - lat1 
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a)) 
+        return c * 3956  # Radius of earth in miles
     except:
         return 999999
 
-def norm_class(v):
-    try: return int(float(v))
-    except: return np.nan
+def clean_property_id(val):
+    """Cleans property account numbers."""
+    return str(val).replace('.0', '').strip()
 
-def class_ok(subj_c, comp_c):
-    if pd.isna(subj_c) or pd.isna(comp_c): return False
-    subj_c = int(subj_c)
-    comp_c = int(comp_c)
-    if subj_c == 8: return comp_c == 8
-    if comp_c == 8: return False
-    if subj_c == 7: return comp_c in (6, 7)
-    if subj_c == 6: return comp_c in (5, 6, 7)
-    return (comp_c >= subj_c - 1) and (comp_c <= subj_c + 2)
+def get_prefix_6(val):
+    if pd.isna(val): return ""
+    clean = str(val).lower().replace(" ", "").replace(".", "").replace("-", "").replace(",", "").replace("/", "")
+    return clean[:6]
 
-def check_uniqueness(subject, candidate, chosen_comps, rules):
+def unique_ok(subject, candidate, chosen_comps):
+    """Prevents duplicate owners or identical addresses."""
     def norm(x): return str(x).strip().lower()
-    if norm(subject.get("Property Account No", "")) == norm(candidate.get("Property Account No", "")): return False
-    for chosen in chosen_comps:
-        if norm(chosen.get("Property Account No", "")) == norm(candidate.get("Property Account No", "")): return False
-        if rules['is_hotel'] and 'Project Name' in candidate and 'Project Name' in chosen:
-            p1 = norm(chosen.get('Project Name', 'a'))
-            p2 = norm(candidate.get('Project Name', 'b'))
-            if p1 and p2 and p1 == p2: return False
+    pairs = [(subject, candidate)] + [(c, candidate) for c in chosen_comps]
+    for a, b in pairs:
+        # Check Account No
+        if norm(a.get("Property Account No", "")) == norm(b.get("Property Account No", "")): return False
+        # Check Owner Name (first 6 chars)
+        if len(get_prefix_6(a.get("Owner Name/ LLC Name", ""))) >= 4 and get_prefix_6(a.get("Owner Name/ LLC Name", "")) == get_prefix_6(b.get("Owner Name/ LLC Name", "")): return False
+        # Check Address (first 6 chars)
+        if len(get_prefix_6(a.get("Property Address", ""))) >= 4 and get_prefix_6(a.get("Property Address", "")) == get_prefix_6(b.get("Property Address", "")): return False
     return True
 
-# ---------- CORE LOGIC ----------
+# ==========================================
+# 2. CORE MATCHING LOGIC
+# ==========================================
 
-def process_matching(subject_df, source_df, rules):
-    results = []
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    total = len(subject_df)
-    
-    if 'lat' in source_df.columns and 'lon' in source_df.columns:
-        src_lats = np.radians(source_df['lat'])
-        src_lons = np.radians(source_df['lon'])
-    
-    for i, (_, srow) in enumerate(subject_df.iterrows()):
-        if i % 5 == 0: 
-            progress_bar.progress((i + 1) / total)
-            status_text.text(f"Processing {i+1}/{total}...")
+def find_comps(srow, src_df, config):
+    sVPU = srow["VPU"]
+    smv = srow["Total Market value-2023"]
+    srm = srow["GBA"]
+    slat, slon = srow.get("lat"), srow.get("lon")
 
-        candidates = source_df.copy()
+    if pd.isna(sVPU) or sVPU == 0: return []
 
-        if rules['is_hotel']:
-            if rules['use_hotel_class'] and 'Class_Num' in srow and 'Class_Num' in candidates.columns:
-                s_cls = srow['Class_Num']
-                if pd.notna(s_cls):
-                    candidates = candidates[candidates['Class_Num'].apply(lambda c: class_ok(s_cls, c))]
-            val_col, size_col = 'VPR', 'Rooms'
+    candidates = []
+
+    # Unpack config
+    max_dist = config['max_dist']
+    comp_must_be_lower = config['comp_lower']
+    val_tol = config['val_tol'] / 100.0  # Convert 50 -> 0.50
+    gba_tol = config['gba_tol'] / 100.0
+
+    for _, crow in src_df.iterrows():
+        cVPU = crow["VPU"]
+        cmv = crow["Total Market value-2023"]
+        crm = crow["GBA"]
+        
+        # --- RULE: Comp Value Lower? ---
+        if pd.isna(cVPU): continue
+        if comp_must_be_lower and cVPU > sVPU: continue
+        
+        # --- RULE: Value Tolerance ---
+        gap_pct = (sVPU - cVPU) / sVPU
+        if abs(gap_pct) > val_tol: continue
+
+        # --- RULE: GBA Tolerance ---
+        if srm > 0:
+            if abs(crm - srm) / srm > gba_tol: continue
+
+        # --- RULE: Distance ---
+        clat, clon = crow.get("lat"), crow.get("lon")
+        dist_miles = 999
+        if pd.notna(slat) and pd.notna(slon) and pd.notna(clat) and pd.notna(clon):
+            dist_miles = haversine(slat, slon, clat, clon)
+        
+        if config['use_dist_filter'] and dist_miles > max_dist:
+            continue
+
+        # --- MATCH TYPE ---
+        match_type = None
+        priority = 99
+        
+        if dist_miles <= max_dist:
+            match_type = f"Within {max_dist} Miles"
+            priority = 1
+        elif str(srow["Property Zip Code"]) == str(crow["Property Zip Code"]):
+            match_type = "Same ZIP"
+            priority = 2
+        elif str(srow["Property City"]).strip().lower() == str(crow["Property City"]).strip().lower():
+            match_type = "Same City"
+            priority = 3
         else:
-            val_col, size_col = 'VPU', 'GBA'
-
-        if val_col in candidates.columns and val_col in srow:
-            candidates = candidates.dropna(subset=[val_col])
-            s_val = srow[val_col]
-            if pd.notna(s_val):
-                if rules['comp_val_lower']: candidates = candidates[candidates[val_col] < s_val]
-                candidates['val_diff_pct'] = (s_val - candidates[val_col]) / s_val
-                if rules['val_tolerance'] > 0:
-                     candidates = candidates[candidates['val_diff_pct'] <= (rules['val_tolerance']/100)]
-        
-        if size_col in candidates.columns and size_col in srow:
-             s_size = srow[size_col]
-             if pd.notna(s_size) and rules['size_tolerance'] > 0:
-                 candidates['size_diff'] = abs(candidates[size_col] - s_size) / s_size
-                 candidates = candidates[candidates['size_diff'] <= (rules['size_tolerance']/100)]
-
-        if pd.notna(srow.get('lat')) and pd.notna(srow.get('lon')) and 'lat' in candidates.columns:
-            slat_rad = np.radians(srow['lat'])
-            slon_rad = np.radians(srow['lon'])
-            dlon = src_lons - slon_rad
-            dlat = src_lats - slat_rad
-            a = np.sin(dlat/2)**2 + np.cos(slat_rad) * np.cos(src_lats) * np.sin(dlon/2)**2
-            c = 2 * np.arcsin(np.sqrt(a))
-            candidates['calc_dist'] = c * 3956
-        else:
-            candidates['calc_dist'] = 999.0
-
-        if rules['filter_by_dist']: candidates = candidates[candidates['calc_dist'] <= rules['max_distance']]
-        
-        candidates['Match_Type'] = "Generic"
-        candidates['priority_score'] = 4
-        
-        s_city = str(srow.get('Property City', '')).strip().lower()
-        if s_city:
-            mask_city = candidates['Property City'].astype(str).str.strip().str.lower() == s_city
-            candidates.loc[mask_city, 'Match_Type'] = "Same City"
-            candidates.loc[mask_city, 'priority_score'] = 3
+            continue 
             
-        s_zip = str(srow.get('Property Zip Code', '')).strip()
-        if s_zip:
-            mask_zip = candidates['Property Zip Code'].astype(str).str.strip() == s_zip
-            candidates.loc[mask_zip, 'Match_Type'] = "Same ZIP"
-            candidates.loc[mask_zip, 'priority_score'] = 2
-            
-        mask_dist = candidates['calc_dist'] <= rules['max_distance']
-        candidates.loc[mask_dist, 'Match_Type'] = "Distance Match"
-        candidates.loc[mask_dist, 'priority_score'] = 1
+        candidates.append({
+            "row": crow,
+            "priority": priority,
+            "dist": dist_miles,
+            "vpu_gap": float(sVPU - cVPU),
+            "match_type": match_type
+        })
 
-        if 'val_diff_pct' in candidates.columns:
-            candidates = candidates.sort_values(by=['priority_score', 'val_diff_pct', 'calc_dist'], ascending=[True, False, True])
-        else:
-            candidates = candidates.sort_values(by=['priority_score', 'calc_dist'], ascending=[True, True])
+    # --- SORTING ---
+    # 1. Match Quality (Priority)
+    # 2. Biggest Price Gap (Descending) -> -x['vpu_gap']
+    # 3. Distance (Ascending)
+    candidates.sort(key=lambda x: (x['priority'], -x['vpu_gap'], x['dist']))
+
+    final_comps = []
+    chosen_rows = []
+    
+    for cand in candidates:
+        if unique_ok(srow, cand["row"], chosen_rows):
+            crow = cand["row"].copy()
+            crow["Match_Method"] = cand["match_type"]
+            crow["Distance_Calc"] = cand["dist"] if cand["dist"] != 999 else "N/A"
+            crow["VPU_Diff"] = cand["vpu_gap"]
+            final_comps.append(crow)
+            chosen_rows.append(crow)
         
-        chosen_comps = []
-        for _, crow in candidates.iterrows():
-            if len(chosen_comps) >= rules['max_comps']: break
-            if check_uniqueness(srow, crow.to_dict(), chosen_comps, rules):
-                chosen_comps.append(crow.to_dict())
+        if len(final_comps) == config['max_comps']: break
+            
+    return final_comps
 
-        out_row = srow.to_dict()
-        for k, comp in enumerate(chosen_comps):
-            prefix = f"Comp{k+1}_"
-            for col, val in comp.items():
-                if col in rules['output_columns']: out_row[f"{prefix}{col}"] = val
-            out_row[f"{prefix}Dist"] = comp.get('calc_dist', 999)
-            out_row[f"{prefix}MatchMethod"] = comp.get('Match_Type', "N/A")
-        results.append(out_row)
+# ==========================================
+# 3. MAIN APP UI
+# ==========================================
 
-    progress_bar.progress(1.0)
-    return pd.DataFrame(results)
-
-# ---------- UI LAYOUT ----------
-
-st.title("🏢 Property Tax Comp Matcher vi")
+st.set_page_config(page_title="Comp Matcher", layout="wide")
 
 # --- SIDEBAR CONFIG ---
 st.sidebar.header("⚙️ Configuration")
-prop_type = st.sidebar.radio("Property Type", ["Hotel", "Standard/Other"])
-is_hotel = (prop_type == "Hotel")
+st.sidebar.markdown("### 📍 Location Rules")
+use_dist = st.sidebar.checkbox("Filter by Distance?", value=True)
+max_dist = st.sidebar.number_input("Max Distance (Miles)", value=15.0, step=1.0)
 
-st.sidebar.subheader("📍 Location Rules")
-filter_dist = st.sidebar.checkbox("Filter by Distance?", value=True)
-max_dist = st.sidebar.number_input("Max Distance (Miles)", value=15.0)
+st.sidebar.markdown("### 💰 Valuation Rules")
+comp_lower = st.sidebar.checkbox("Comp Value MUST be lower?", value=True)
+val_tol = st.sidebar.number_input("Value Tolerance % (Gap)", value=50.0, step=5.0)
 
-st.sidebar.subheader("💰 Valuation Rules")
-comp_val_lower = st.sidebar.checkbox("Comp Value MUST be lower?", value=True)
-val_tol = st.sidebar.number_input("Value Tolerance % (Gap)", value=50.0)
+st.sidebar.markdown("### 🏗️ Property Specs")
+gba_tol = st.sidebar.number_input("GBA Tolerance %", value=50.0, step=5.0)
+max_comps_count = st.sidebar.number_input("Max Comps to Find", value=10, step=1, min_value=1, max_value=20)
 
-st.sidebar.subheader("🏗️ Property Specs")
-if is_hotel:
-    use_class = st.sidebar.checkbox("Enforce Hotel Class Match?", value=True)
-    size_tol = st.sidebar.number_input("Room Count Tolerance %", value=50.0)
-else:
-    use_class = False
-    size_tol = st.sidebar.number_input("GBA Tolerance %", value=50.0)
-
-max_comps = st.sidebar.number_input("Max Comps to Find", value=3)
-
-if is_hotel:
-    out_cols = ["Property Account No", "Hotel Name", "Rooms", "VPR", "Hotel Class", "Property Address", "Owner Name/ LLC Name", "Project Name"]
-else:
-    out_cols = ["Property Account No", "Property Address", "VPU", "GBA", "Total Market value-2023", "Owner Name/ LLC Name"]
-
-RULES = {
-    'is_hotel': is_hotel, 'use_hotel_class': use_class, 'filter_by_dist': filter_dist,
-    'max_distance': max_dist, 'comp_val_lower': comp_val_lower, 'val_tolerance': val_tol,
-    'size_tolerance': size_tol, 'max_comps': max_comps, 'output_columns': out_cols
+config = {
+    'use_dist_filter': use_dist,
+    'max_dist': max_dist,
+    'comp_lower': comp_lower,
+    'val_tol': val_tol,
+    'gba_tol': gba_tol,
+    'max_comps': max_comps_count
 }
 
-# --- GIF PLACEHOLDER (Top Center) ---
-# Create an empty container that we can update
-hero_container = st.empty()
+# --- HEADER ---
+st.title("🏢 Property Tax Comp Matcher")
+st.markdown("Automated comparison based on **VPU Gap** and **Location**.")
 
-# --- INITIAL IDLE STATE ---
-# Only show this if we are NOT running yet (Session state handles this normally, 
-# but for simple scripts, we default to showing Idle until button click updates it)
+# --- FILE UPLOADS ---
+col1, col2 = st.columns(2)
+with col1:
+    st.info("Step 1: Upload Subject List")
+    subj_file = st.file_uploader("Choose Subject Excel", type=["xlsx"], key="subj")
 
-# Idle GIF: "Waiting / Analytical"
-# Use Markdown to display centering and the image
-hero_container.markdown(
-    """
-    <div style="text-align: center;">
-        <img src="https://media.giphy.com/media/l0HlHJGHe3yAMhdQY/giphy.gif" width="300">
-        <p style="color:gray;"><i>Ready to analyze your property data...</i></p>
-    </div>
-    """, 
-    unsafe_allow_html=True
-)
+with col2:
+    st.info("Step 2: Upload Data Source")
+    src_file = st.file_uploader("Choose Data Source Excel", type=["xlsx"], key="src")
 
-# --- UPLOAD SECTION ---
-st.markdown("---")
-c1, c2 = st.columns(2)
-subj_file = c1.file_uploader("Upload SUBJECTS", type=["xlsx"])
-src_file = c2.file_uploader("Upload DATA SOURCE", type=["xlsx"])
-
+# --- PROCESSING ---
 if subj_file and src_file:
-    # Button triggers the switch
-    if st.button("🚀 Start Matching Process"):
+    if st.button("🚀 Run Matching Process", type="primary"):
         
-        # 1. SWITCH GIF TO "ACTIVE" STATE
-        hero_container.markdown(
-            """
-            <div style="text-align: center;">
-                <img src="https://media.giphy.com/media/2IudUHdI075HL02Pkk/giphy.gif" width="400">
-                <p style="color:#2563eb; font-weight:bold;"><i>Processing Data... Please Wait!</i></p>
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
+        # Placeholder for status
+        status_text = st.empty()
         
-        # 2. Run Process
-        try:
-            df_subj = pd.read_excel(subj_file)
-            df_src = pd.read_excel(src_file)
-            
-            # Basic Cleaning
-            if is_hotel:
-                if 'Hotel class values' in df_subj.columns: df_subj['Class_Num'] = df_subj['Hotel class values'].apply(norm_class)
-                if 'Hotel class values' in df_src.columns: df_src['Class_Num'] = df_src['Hotel class values'].apply(norm_class)
-            
-            cols_num = ['VPR', 'VPU', 'Rooms', 'GBA', 'lat', 'lon', 'Market Value-2023', 'Total Market value-2023']
-            for df in [df_subj, df_src]:
-                for c in cols_num:
-                    if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
-                if 'lon' in df.columns: df['lon'] = df['lon'].apply(lambda x: -abs(x) if pd.notna(x) else x)
+        with st.spinner("Reading files and processing matches..."):
+            try:
+                # Load Data
+                df_subj = pd.read_excel(subj_file)
+                df_src = pd.read_excel(src_file)
 
-            # Actual Logic
-            result = process_matching(df_subj, df_src, RULES)
-            
-            # 3. SWITCH GIF TO "DONE" STATE
-            hero_container.markdown(
-                """
-                <div style="text-align: center;">
-                    <img src="https://media.giphy.com/media/tf9JJY57TR196/giphy.gif" width="300">
-                    <p style="color:green; font-weight:bold;"><i>✅ Job Done! Download below.</i></p>
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
+                # Pre-processing
+                df_subj.columns = df_subj.columns.str.strip()
+                df_src.columns = df_src.columns.str.strip()
 
-            st.success("Analysis Complete!")
-            st.dataframe(result.head())
-            
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                result.to_excel(writer, index=False)
+                for df in [df_subj, df_src]:
+                    if "Property Account No" in df.columns:
+                        df["Property Account No"] = df["Property Account No"].apply(clean_property_id)
+                    elif "Concat" in df.columns:
+                        df["Property Account No"] = df["Concat"].astype(str).str.extract(r'(\d+)', expand=False)
+                    
+                    cols_to_num = ["Property Zip Code", "GBA", "VPU", "Total Market value-2023", "lat", "lon"]
+                    for c in cols_to_num:
+                        if c in df.columns:
+                            df[c] = pd.to_numeric(df[c], errors="coerce")
+                    
+                    if "lon" in df.columns:
+                         df["lon"] = df["lon"].apply(lambda x: -abs(x) if pd.notna(x) else x)
+
+                df_subj = df_subj.dropna(subset=["Property Zip Code", "VPU"])
+                df_src = df_src.dropna(subset=["Property Zip Code", "VPU"])
+
+                # Matching
+                OUTPUT_COLS = [
+                    "Property Account No","GBA","VPU","Property Address","Property City",
+                    "Property County", "Property State","Property Zip Code","Assessed Value-2023",
+                    "Total Market value-2023","Owner Name/ LLC Name","Owner Street Address",
+                    "Owner City","Owner State","Owner ZIP"
+                ]
+
+                results = []
+                prog_bar = st.progress(0)
+                total_subj = len(df_subj)
+
+                for i, (_, srow) in enumerate(df_subj.iterrows()):
+                    comps = find_comps(srow, df_src, config)
+                    
+                    row = {}
+                    for c in OUTPUT_COLS: row[f"Subject_{c}"] = srow.get(c, "")
+                    
+                    for k in range(config['max_comps']):
+                        prefix = f"Comp{k+1}"
+                        if k < len(comps):
+                            crow = comps[k]
+                            for c in OUTPUT_COLS: row[f"{prefix}_{c}"] = crow.get(c, "")
+                            row[f"{prefix}_Match_Method"] = crow.get("Match_Method", "")
+                            d = crow.get("Distance_Calc", "")
+                            row[f"{prefix}_Distance"] = f"{d:.2f}" if isinstance(d, float) else d
+                            gap = crow.get("VPU_Diff", "")
+                            row[f"{prefix}_VPU_Gap"] = f"{gap:.2f}" if isinstance(gap, float) else gap
+                        else:
+                            for c in OUTPUT_COLS: row[f"{prefix}_{c}"] = ""
+                            row[f"{prefix}_Match_Method"] = ""
+                            row[f"{prefix}_Distance"] = ""
+                            row[f"{prefix}_VPU_Gap"] = ""
+                    
+                    results.append(row)
+                    prog_bar.progress((i + 1) / total_subj)
+
+                # Export
+                df_final = pd.DataFrame(results)
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    df_final.to_excel(writer, index=False)
                 
-            st.download_button("📥 Download Results", buffer, "Comp_Results_v4.xlsx")
-            
-        except Exception as e:
-            st.error(f"Error: {e}")
-            # Reset GIF on error
-            hero_container.markdown("❌ Error occurred.")
+                # --- SUCCESS STATE ---
+                st.balloons() # Standard Streamlit Celebration
+                
+                # Reliable GIF (Checkmark)
+                st.image("https://i.gifer.com/7efs.gif", width=100) 
+                
+                st.success(f"✅ Job Done! Processed {total_subj} subjects.")
+                
+                st.download_button(
+                    label="📥 Download Results (Excel)",
+                    data=buffer.getvalue(),
+                    file_name="Automated_Comps_Results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
