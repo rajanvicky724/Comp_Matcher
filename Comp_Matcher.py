@@ -252,7 +252,7 @@ def process_matching(subject_df, source_df, rules):
 
 # ---------- UI LAYOUT ----------
 
-st.title("🏢 Property Tax Comp Matcher v3")
+st.title("🏢 Property Tax Comp Matcher vi")
 
 # --- SIDEBAR CONFIG ---
 st.sidebar.header("⚙️ Configuration")
@@ -345,5 +345,6 @@ if subj_file and src_file:
                 
             except Exception as e:
                 st.error(f"Error: {e}")
+
 
 
