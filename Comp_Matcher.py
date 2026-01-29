@@ -6,6 +6,68 @@ import io
 st.set_page_config(page_title="Comp Matcher Ultimate", layout="wide")
 
 # ---------- HELPER FUNCTIONS ----------
+def set_custom_style():
+    st.markdown("""
+        <style>
+        /* 1. Main Background Gradient */
+        .stApp {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+        }
+
+        /* 2. Sidebar styling */
+        section[data-testid="stSidebar"] {
+            background-color: #111827;
+            border-right: 1px solid #374151;
+        }
+        
+        /* 3. Cards for Upload Sections */
+        .css-1r6slb0, .stFileUploader {
+            background-color: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        /* 4. Rocket Button (Big & Glowing) */
+        div.stButton > button {
+            width: 100%;
+            background: linear-gradient(90deg, #FF512F 0%, #DD2476 100%);
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            padding: 15px 0px;
+            border: none;
+            border-radius: 12px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        div.stButton > button:hover {
+            transform: scale(1.02);
+            box-shadow: 0 0 20px rgba(221, 36, 118, 0.6);
+            color: white;
+        }
+
+        /* 5. Headers */
+        h1 {
+            text-align: center;
+            font-family: 'Helvetica Neue', sans-serif;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            margin-bottom: 30px;
+        }
+        
+        /* 6. Info Box Customization */
+        .stAlert {
+            background-color: rgba(0, 0, 0, 0.3);
+            border: 1px solid #3b82f6;
+            color: #e5e7eb;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+# ... inside your main code ...
+st.set_page_config(page_title="Comp Matcher Ultimate", layout="wide")
+set_custom_style()  # <--- CALL IT HERE!
 
 def haversine(lat1, lon1, lat2, lon2):
     try:
@@ -286,3 +348,4 @@ if subj_file and src_file:
                 
             except Exception as e:
                 st.error(f"Error: {e}")
+
