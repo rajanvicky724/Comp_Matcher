@@ -407,7 +407,7 @@ if subj_file is not None and src_file is not None:
                 else:
                     required_cols = ["Property Zip Code", "VPU"]
 
-                # --- DIAGNOSTIC HINTS BEFORE MATCHING ---
+                # --- DETAILED DIAGNOSTIC HINTS BEFORE MATCHING ---
                 st.subheader("Diagnostics / Hints")
 
                 st.write("**Subject columns:**", list(subj.columns))
@@ -417,12 +417,26 @@ if subj_file is not None and src_file is not None:
                 missing_src_cols = [c for c in required_cols if c not in src.columns]
 
                 if missing_subj_cols:
-                    st.warning(f"Subject file is missing required columns: {missing_subj_cols}")
+                    st.error(f"Subject file is missing required columns: {missing_subj_cols}")
                 if missing_src_cols:
-                    st.warning(f"Data Source file is missing required columns: {missing_src_cols}")
+                    st.error(f"Data Source file is missing required columns: {missing_src_cols}")
+
+                # If any required column is missing, stop immediately
+                if missing_subj_cols or missing_src_cols:
+                    st.stop()
 
                 before_subj = len(subj)
                 before_src = len(src)
+
+                st.write("### Null / invalid counts in required columns (Subject)")
+                for c in required_cols:
+                    if c in subj.columns:
+                        st.write(f"- {c}: {subj[c].isna().sum()} nulls")
+
+                st.write("### Null / invalid counts in required columns (Source)")
+                for c in required_cols:
+                    if c in src.columns:
+                        st.write(f"- {c}: {src[c].isna().sum()} nulls")
 
                 subj_valid = subj.dropna(subset=[c for c in required_cols if c in subj.columns])
                 src_valid = src.dropna(subset=[c for c in required_cols if c in src.columns])
@@ -432,9 +446,9 @@ if subj_file is not None and src_file is not None:
 
                 if len(subj_valid) == 0:
                     st.error(
-                        "All subject rows were dropped. Common reasons:\n"
-                        "- Required columns are blank or non-numeric (e.g., VPR / VPU, Property Zip Code, Class_Num).\n"
-                        "- Column names in Excel do not exactly match expected names."
+                        "All subject rows were dropped because at least one required column "
+                        "is null or invalid on every row. Check the null counts above and fix "
+                        "those columns in Excel."
                     )
 
                 subj = subj_valid
