@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import math
 import io
+from streamlit_bmc import button  # adjust name if your package is different
 
 # ==========================================
 # 1. HELPER FUNCTIONS
@@ -492,3 +493,7 @@ if subj_file is not None and src_file is not None:
                 st.error(f"An error occurred: {e}")
 else:
     st.info("Please upload both Subject and Data Source Excel files to begin.")
+# --- FLOATING COFFEE BUTTON ---
+button(username="vigneshna", floating=True, width=221)
+    
+
