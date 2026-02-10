@@ -654,23 +654,28 @@ else:
 # ---------- BUY ME A COFFEE FLOATING BUTTON ----------
 import streamlit.components.v1 as components
 
-components.html(
+st.markdown("---")
+st.markdown(
     """
-    <script data-name="BMC-Widget"
-            data-cfasync="false"
-            src="https://cdnjs.buymeacoffee.com/1.0.0/widget.prod.min.js"
-            data-id="vigneshna"
-            data-description="Support me on Buy me a coffee!"
-            data-message=""
-            data-color="#FF813F"
-            data-position="Right"
-            data-x_margin="18"
-            data-y_margin="18">
-    </script>
+    <div style="text-align: center; margin-top: 10px;">
+        <a href="https://www.buymeacoffee.com/vigneshna" target="_blank"
+           style="
+             background-color:#FF813F;
+             color:white;
+             padding:10px 18px;
+             border-radius:6px;
+             text-decoration:none;
+             font-weight:600;
+             font-family: 'Segoe UI', sans-serif;
+           ">
+           ☕ Buy me a coffee
+        </a>
+    </div>
     """,
-    height=0,
-    width=0,
+    unsafe_allow_html=True,
 )
+
+
 
 
 
