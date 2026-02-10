@@ -1,9 +1,9 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import math
 import io
-from streamlit_bmc import button  # adjust name if your package is different
 
 # ==========================================
 # 1. HELPER FUNCTIONS
@@ -78,7 +78,7 @@ def unique_ok(subject, candidate, chosen_comps, is_hotel):
     return True
 
 
-# ---------- CLASS RULE FOR HOTEL (OPTIONAL TOGGLE) ----------
+# ---------- CLASS RULES ----------
 
 def class_ok_hotel(subj_c, comp_c):
     """Original hotel class rule."""
@@ -96,13 +96,12 @@ def class_ok_hotel(subj_c, comp_c):
 
 
 def class_ok_other(subj_c, comp_c):
-    """For non-hotel: simple tolerance on class number, or always true."""
+    """For non-hotel: simple tolerance on class number."""
     try:
         subj_c = int(subj_c)
         comp_c = int(comp_c)
     except Exception:
         return False
-    # Example: allow ±2 classes; adjust if needed via sidebar later if you want
     return abs(comp_c - subj_c) <= 2
 
 
@@ -124,7 +123,7 @@ def find_comps(
     use_strict_distance,
 ):
     """
-    is_hotel: True = Hotel Property (VPR, rooms), False = Other Property (VPU, GBA).
+    is_hotel: True = Hotel Property (VPR, Rooms), False = Other Property (VPU, GBA).
     use_hotel_class_rule: if False, ignore Hotel class rule even for hotels.
     """
 
@@ -154,12 +153,9 @@ def find_comps(
 
         # ---- CLASS RULES ----
         if is_hotel and use_hotel_class_rule:
-            # Apply original hotel class rule
             if not class_ok_hotel(subj_class, comp_class):
                 continue
         else:
-            # For non-hotel, or if hotel rule is disabled, either ignore or use a simple rule
-            # Here we use a simple rule; you can tweak later via sidebar if needed
             if pd.notna(subj_class) and pd.notna(comp_class):
                 if not class_ok_other(subj_class, comp_class):
                     continue
@@ -168,7 +164,6 @@ def find_comps(
         comp_value = crow.get(value_field)
         comp_size = crow.get(size_field)
 
-        # Metric must be present and <= subject metric (comp must be lower)
         if pd.isna(comp_metric) or comp_metric > subj_metric:
             continue
 
@@ -210,7 +205,6 @@ def find_comps(
             priority = 3
         else:
             if use_strict_distance:
-                # Ignore if strict distance ON
                 continue
             else:
                 match_type = "Fallback (Location mismatch)"
@@ -222,7 +216,7 @@ def find_comps(
             (crow, priority, dist_miles, metric_gap, match_type)
         )
 
-    # Sort by priority, distance, then metric gap (biggest gap first or smallest — choose)
+    # Sort by priority, distance, then metric gap (bigger gap first)
     candidates.sort(key=lambda x: (x[1], x[2], -x[3]))
 
     final_comps = []
@@ -281,7 +275,6 @@ st.title("🏢 Property Tax / Hotel Comp Matcher")
 
 st.sidebar.header("⚙️ Configuration")
 
-# Property type
 prop_type = st.sidebar.radio(
     "Property Type",
     ["Hotel Property", "Other Property"],
@@ -290,7 +283,6 @@ prop_type = st.sidebar.radio(
 
 is_hotel = prop_type == "Hotel Property"
 
-# Hotel class rule toggle
 use_hotel_class_rule = False
 if is_hotel:
     use_hotel_class_rule = st.sidebar.checkbox(
@@ -328,8 +320,11 @@ max_gap_pct_main = st.sidebar.number_input(
 
 st.sidebar.markdown("### 📈 Value & Size Rules")
 max_gap_pct_value = st.sidebar.number_input(
-    "Max Market/Total Value Gap %", value=50.0, step=5.0,
-    min_value=0.0, max_value=100.0
+    "Max Market/Total Value Gap %",
+    value=50.0,
+    step=5.0,
+    min_value=0.0,
+    max_value=100.0
 ) / 100.0
 
 max_gap_pct_size = st.sidebar.number_input(
@@ -371,11 +366,9 @@ if subj_file is not None and src_file is not None:
                 subj = pd.read_excel(subj_file)
                 src = pd.read_excel(src_file)
 
-                # Strip columns
                 subj.columns = subj.columns.str.strip()
                 src.columns = src.columns.str.strip()
 
-                # Pre-processing
                 for df in (subj, src):
                     # Property Account
                     if "Property Account No" in df.columns:
@@ -390,7 +383,7 @@ if subj_file is not None and src_file is not None:
                             df["Concat"].astype(str).str.extract(r"(\d+)", expand=False)
                         )
 
-                    # Class_Num (for hotel or other)
+                    # Class_Num
                     if "Hotel class values" in df.columns:
                         df["Class_Num"] = df["Hotel class values"].apply(norm_class)
                     elif "Class" in df.columns:
@@ -398,7 +391,6 @@ if subj_file is not None and src_file is not None:
                     else:
                         df["Class_Num"] = np.nan
 
-                    # Common numeric columns
                     for c in ["Property Zip Code", "Rooms", "GBA", "VPR", "VPU",
                               "Market Value-2023", "Total Market value-2023", "lat", "lon"]:
                         if c in df.columns:
@@ -409,7 +401,6 @@ if subj_file is not None and src_file is not None:
                             lambda x: -abs(x) if pd.notna(x) else x
                         )
 
-                # Drop rows missing key fields, depending on property type
                 if is_hotel:
                     required_cols = ["Property Zip Code", "Class_Num", "VPR"]
                 else:
@@ -418,7 +409,6 @@ if subj_file is not None and src_file is not None:
                 subj = subj.dropna(subset=[c for c in required_cols if c in subj.columns])
                 src = src.dropna(subset=[c for c in required_cols if c in src.columns])
 
-                # Select output columns
                 if is_hotel:
                     OUTPUT_COLS = OUTPUT_COLS_HOTEL
                     metric_field = "VPR"
@@ -477,7 +467,6 @@ if subj_file is not None and src_file is not None:
                 st.success(f"✅ Done! Processed {total_subj} subjects.")
                 st.dataframe(df_final.head())
 
-                # Download button
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
                     df_final.to_excel(writer, index=False)
@@ -493,7 +482,23 @@ if subj_file is not None and src_file is not None:
                 st.error(f"An error occurred: {e}")
 else:
     st.info("Please upload both Subject and Data Source Excel files to begin.")
-# --- FLOATING COFFEE BUTTON ---
-button(username="vigneshna", floating=True, width=221)
-    
 
+# ---------- BUY ME A COFFEE FLOATING BUTTON ----------
+
+components.html(
+    """
+    <script data-name="BMC-Widget"
+            data-cfasync="false"
+            src="https://cdnjs.buymeacoffee.com/1.0.0/widget.prod.min.js"
+            data-id="vigneshna"
+            data-description="Support me on Buy me a coffee!"
+            data-message=""
+            data-color="#FF813F"
+            data-position="Right"
+            data-x_margin="18"
+            data-y_margin="18">
+    </script>
+    """,
+    height=0,
+    width=0,
+)
