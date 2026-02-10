@@ -269,6 +269,25 @@ def get_val(row, col):
 # ==========================================
 
 st.set_page_config(page_title="Comp Matcher", layout="wide")
+st.markdown(
+    """
+    <style>
+    .page-watermark {
+        position: fixed;
+        bottom: 10px;
+        right: 10px;
+        color: rgba(0, 0, 0, 0.15);
+        font-size: 24px;
+        font-weight: 600;
+        font-family: "Segoe UI", sans-serif;
+        z-index: 1000;
+        pointer-events: none;
+    }
+    </style>
+    <div class="page-watermark">Vignesh</div>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     """
@@ -674,6 +693,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 
 
