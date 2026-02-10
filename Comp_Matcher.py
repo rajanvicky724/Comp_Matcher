@@ -122,11 +122,13 @@ def find_comps(
     max_comps,
     use_strict_distance,
     use_county_match,
+    sort_mode,
 ):
     """
     is_hotel: True = Hotel Property (VPR, Rooms), False = Other Property (VPU, GBA).
     use_hotel_class_rule: if False, ignore Hotel class rule even for hotels.
     use_county_match: if True, Same County is used after City.
+    sort_mode: 'Distance Priority' or 'VPR/VPU Gap (lower comp value)'.
     """
 
     # Choose metric names based on property type
@@ -181,7 +183,7 @@ def find_comps(
         if not tolerance_ok(subj_size, comp_size, max_gap_pct_size):
             continue
 
-        # Distance (still computed so we can show it, even if ignored in non-strict mode)
+        # Distance (for info / strict mode)
         clat, clon = crow.get("lat"), crow.get("lon")
         dist_miles = 999
         if pd.notna(slat) and pd.notna(slon) and pd.notna(clat) and pd.notna(clon):
@@ -236,8 +238,14 @@ def find_comps(
             (crow, priority, dist_miles, metric_gap, match_type)
         )
 
-    # Sort by priority, distance, then metric gap (bigger gap first)
-    candidates.sort(key=lambda x: (x[1], x[2], -x[3]))
+    # Sort according to chosen mode
+    # x = (crow, priority, dist_miles, metric_gap, match_type)
+    if sort_mode == "Distance Priority":
+        # Priority -> distance -> bigger gap first
+        candidates.sort(key=lambda x: (x[1], x[2], -x[3]))
+    else:
+        # Priority -> bigger gap first -> distance
+        candidates.sort(key=lambda x: (x[1], -x[3], x[2]))
 
     final_comps = []
     chosen_rows = []
@@ -360,6 +368,15 @@ use_county_match = st.sidebar.checkbox(
     help="If checked, Same County is used after City in the priority order."
 )
 
+sort_mode = st.sidebar.radio(
+    "Choose Comp Based On",
+    ["Distance Priority", "VPR/VPU Gap (lower comp value)"],
+    help=(
+        "Distance Priority: Radius/ZIP/City/County first, then VPR/VPU gap. "
+        "Gap: prefers comps whose VPR/VPU is much lower than the subject."
+    ),
+)
+
 st.sidebar.markdown("### 💰 Main Metric Rules")
 if is_hotel:
     st.sidebar.write("Main Metric: **VPR**")
@@ -398,6 +415,41 @@ max_comps = st.sidebar.number_input(
     min_value=1,
     max_value=20
 )
+
+st.sidebar.markdown("### 💸 Overpaid Analysis")
+use_overpaid = st.sidebar.checkbox(
+    "Calculate Overpaid Amount?",
+    value=False,
+    help="If checked, calculates an overpaid estimate from the selected comps.",
+)
+
+overpaid_base_dim = None
+if use_overpaid:
+    if is_hotel:
+        overpaid_base_dim = st.sidebar.radio(
+            "Use Rooms or GBA?",
+            ["Rooms", "GBA"],
+            index=0,
+            help="Which size dimension to use for overpaid calculation.",
+        )
+    else:
+        overpaid_base_dim = st.sidebar.radio(
+            "Use Units or GBA?",
+            ["GBA"],
+            index=0,
+            help="For now, GBA is used for other property types.",
+        )
+
+    overpaid_pct = st.sidebar.number_input(
+        "Overpaid Percentage (%)",
+        value=10.0,
+        step=1.0,
+        min_value=0.0,
+        max_value=100.0,
+        help="Percentage used in overpaid formula.",
+    ) / 100.0
+else:
+    overpaid_pct = 0.0
 
 # ---------- FILE UPLOADS ----------
 
@@ -533,6 +585,7 @@ if subj_file is not None and src_file is not None:
                         max_comps=max_comps,
                         use_strict_distance=use_strict_distance,
                         use_county_match=use_county_match,
+                        sort_mode=sort_mode,
                     )
 
                     row = {}
@@ -560,6 +613,50 @@ if subj_file is not None and src_file is not None:
                             row[f"{prefix}_Match_Method"] = ""
                             row[f"{prefix}_Distance_Miles"] = ""
                             row[f"{prefix}_{metric_field}_Gap"] = ""
+
+                    # --- Overpaid calculation (optional) ---
+                    if use_overpaid:
+                        comp_metrics = []
+                        for k2 in range(max_comps):
+                            p2 = f"Comp{k2+1}"
+                            col_name = f"{p2}_{metric_field}"
+                            val = row.get(col_name, None)
+                            if val not in (None, "", "N/A"):
+                                try:
+                                    comp_metrics.append(float(val))
+                                except Exception:
+                                    pass
+
+                        if len(comp_metrics) > 0:
+                            median_metric = float(pd.Series(comp_metrics).median())
+
+                            subj_dim = srow.get(overpaid_base_dim, 0) if overpaid_base_dim else 0
+                            try:
+                                subj_dim = float(subj_dim)
+                            except Exception:
+                                subj_dim = 0.0
+
+                            step2_val = median_metric * subj_dim
+                            step3_val = step2_val * overpaid_pct
+
+                            if is_hotel:
+                                subj_mv = srow.get("Market Value-2023", 0)
+                            else:
+                                subj_mv = srow.get("Total Market value-2023", 0)
+                            try:
+                                subj_mv = float(subj_mv)
+                            except Exception:
+                                subj_mv = 0.0
+                            step4_val = subj_mv * overpaid_pct
+
+                            overpaid_val = step4_val - step3_val
+                        else:
+                            overpaid_val = ""
+
+                        row["Subject_Overpaid_Value"] = overpaid_val
+                    else:
+                        row["Subject_Overpaid_Value"] = ""
+
                     results.append(row)
                     prog_bar.progress((i + 1) / total_subj)
 
