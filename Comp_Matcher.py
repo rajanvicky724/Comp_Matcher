@@ -410,9 +410,6 @@ if subj_file is not None and src_file is not None:
                 # --- DETAILED DIAGNOSTIC HINTS BEFORE MATCHING ---
                 st.subheader("Diagnostics / Hints")
 
-                st.write("**Subject columns:**", list(subj.columns))
-                st.write("**Source columns:**", list(src.columns))
-
                 missing_subj_cols = [c for c in required_cols if c not in subj.columns]
                 missing_src_cols = [c for c in required_cols if c not in src.columns]
 
@@ -550,3 +547,4 @@ components.html(
     height=0,
     width=0,
 )
+
