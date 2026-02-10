@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import math
 import io
+from streamlit_extras.buy_me_a_coffee import button
 
 # ==========================================
 # 1. HELPER FUNCTIONS
@@ -670,3 +671,4 @@ components.html(
     height=0,
     width=0,
 )
+
