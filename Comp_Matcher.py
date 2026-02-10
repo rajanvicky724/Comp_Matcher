@@ -121,10 +121,12 @@ def find_comps(
     max_gap_pct_size,
     max_comps,
     use_strict_distance,
+    use_county_match,
 ):
     """
     is_hotel: True = Hotel Property (VPR, Rooms), False = Other Property (VPU, GBA).
     use_hotel_class_rule: if False, ignore Hotel class rule even for hotels.
+    use_county_match: if True, Same County is 4th priority before fallback.
     """
 
     # Choose metric names based on property type
@@ -193,6 +195,8 @@ def find_comps(
         is_zip = str(srow.get("Property Zip Code")) == str(crow.get("Property Zip Code"))
         is_city = str(srow.get("Property City", "")).strip().lower() == \
                   str(crow.get("Property City", "")).strip().lower()
+        is_county = str(srow.get("Property County", "")).strip().lower() == \
+                    str(crow.get("Property County", "")).strip().lower()
 
         if is_radius:
             match_type = f"Within {max_radius_miles} Miles"
@@ -203,12 +207,15 @@ def find_comps(
         elif is_city:
             match_type = "Same City"
             priority = 3
+        elif use_county_match and is_county:
+            match_type = "Same County"
+            priority = 4
         else:
             if use_strict_distance:
                 continue
             else:
                 match_type = "Fallback (Location mismatch)"
-                priority = 4
+                priority = 5
 
         metric_gap = float(subj_metric - comp_metric)
 
@@ -295,13 +302,18 @@ st.sidebar.markdown("### 📍 Location Rules")
 use_strict_distance = st.sidebar.checkbox(
     "Strict Distance Filter?",
     value=True,
-    help="If checked, ignore comps that are not within the radius / ZIP / City rules."
+    help="If checked, ignore comps that are not within Radius/ZIP/City/County rules."
 )
 max_radius = st.sidebar.number_input(
     "Max Radius (Miles)",
     value=15.0,
     step=1.0,
     min_value=0.0
+)
+use_county_match = st.sidebar.checkbox(
+    "Use County Match (4th Priority)",
+    value=True,
+    help="If checked, Same County is used after City when distance filter logic runs."
 )
 
 st.sidebar.markdown("### 💰 Main Metric Rules")
@@ -407,7 +419,7 @@ if subj_file is not None and src_file is not None:
                 else:
                     required_cols = ["Property Zip Code", "VPU"]
 
-                # --- DETAILED DIAGNOSTIC HINTS BEFORE MATCHING ---
+                # --- DETAILED DIAGNOSTICS ---
                 st.subheader("Diagnostics / Hints")
 
                 missing_subj_cols = [c for c in required_cols if c not in subj.columns]
@@ -418,7 +430,6 @@ if subj_file is not None and src_file is not None:
                 if missing_src_cols:
                     st.error(f"Data Source file is missing required columns: {missing_src_cols}")
 
-                # If any required column is missing, stop immediately
                 if missing_subj_cols or missing_src_cols:
                     st.stop()
 
@@ -477,6 +488,7 @@ if subj_file is not None and src_file is not None:
                         max_gap_pct_size=max_gap_pct_size,
                         max_comps=max_comps,
                         use_strict_distance=use_strict_distance,
+                        use_county_match=use_county_match,
                     )
 
                     row = {}
@@ -547,4 +559,3 @@ components.html(
     height=0,
     width=0,
 )
-
