@@ -126,7 +126,7 @@ def find_comps(
     """
     is_hotel: True = Hotel Property (VPR, Rooms), False = Other Property (VPU, GBA).
     use_hotel_class_rule: if False, ignore Hotel class rule even for hotels.
-    use_county_match: if True, Same County is 4th priority before fallback.
+    use_county_match: if True, Same County is used after City.
     """
 
     # Choose metric names based on property type
@@ -181,7 +181,7 @@ def find_comps(
         if not tolerance_ok(subj_size, comp_size, max_gap_pct_size):
             continue
 
-        # Distance
+        # Distance (still computed so we can show it, even if ignored in non-strict mode)
         clat, clon = crow.get("lat"), crow.get("lon")
         dist_miles = 999
         if pd.notna(slat) and pd.notna(slon) and pd.notna(clat) and pd.notna(clon):
@@ -198,24 +198,37 @@ def find_comps(
         is_county = str(srow.get("Property County", "")).strip().lower() == \
                     str(crow.get("Property County", "")).strip().lower()
 
-        if is_radius:
-            match_type = f"Within {max_radius_miles} Miles"
-            priority = 1
-        elif is_zip:
-            match_type = "Same ZIP"
-            priority = 2
-        elif is_city:
-            match_type = "Same City"
-            priority = 3
-        elif use_county_match and is_county:
-            match_type = "Same County"
-            priority = 4
-        else:
-            if use_strict_distance:
-                continue
+        if use_strict_distance:
+            # STRICT MODE: use radius, then ZIP, City, County; else skip
+            if is_radius:
+                match_type = f"Within {max_radius_miles} Miles"
+                priority = 1
+            elif is_zip:
+                match_type = "Same ZIP"
+                priority = 2
+            elif is_city:
+                match_type = "Same City"
+                priority = 3
+            elif use_county_match and is_county:
+                match_type = "Same County"
+                priority = 4
             else:
-                match_type = "Fallback (Location mismatch)"
-                priority = 5
+                # No allowed location match in strict mode
+                continue
+        else:
+            # NON-STRICT MODE: IGNORE RADIUS, only ZIP -> City -> County
+            if is_zip:
+                match_type = "Same ZIP"
+                priority = 1
+            elif is_city:
+                match_type = "Same City"
+                priority = 2
+            elif use_county_match and is_county:
+                match_type = "Same County"
+                priority = 3
+            else:
+                # No location match at all when strict OFF
+                continue
 
         metric_gap = float(subj_metric - comp_metric)
 
@@ -276,7 +289,38 @@ def get_val(row, col):
 
 st.set_page_config(page_title="Comp Matcher", layout="wide")
 
-st.title("🏢 Property Tax / Hotel Comp Matcher")
+# Simple theming for header / sidebar
+st.markdown(
+    """
+    <style>
+    .main-header {
+        background: linear-gradient(90deg, #1f4e79, #2980b9);
+        color: white;
+        padding: 12px 18px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        font-family: "Segoe UI", sans-serif;
+    }
+    .main-header h1 {
+        font-size: 26px;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="main-header">
+      <h1>🏙️ Property Tax / Hotel Comp Matcher</h1>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ---------- SIDEBAR CONFIG ----------
 
@@ -302,7 +346,7 @@ st.sidebar.markdown("### 📍 Location Rules")
 use_strict_distance = st.sidebar.checkbox(
     "Strict Distance Filter?",
     value=True,
-    help="If checked, ignore comps that are not within Radius/ZIP/City/County rules."
+    help="If checked: use Radius → ZIP → City → County. If unchecked: ignore Radius, use ZIP → City → County."
 )
 max_radius = st.sidebar.number_input(
     "Max Radius (Miles)",
@@ -311,9 +355,9 @@ max_radius = st.sidebar.number_input(
     min_value=0.0
 )
 use_county_match = st.sidebar.checkbox(
-    "Use County Match (4th Priority)",
+    "Use County Match (after City)",
     value=True,
-    help="If checked, Same County is used after City when distance filter logic runs."
+    help="If checked, Same County is used after City in the priority order."
 )
 
 st.sidebar.markdown("### 💰 Main Metric Rules")
@@ -372,7 +416,7 @@ with col2:
 # ---------- PROCESS ----------
 
 if subj_file is not None and src_file is not None:
-    if st.button("🚀 Run Matching"):
+    if st.button("🚀 Run Matching", type="primary"):
         with st.spinner("Processing..."):
             try:
                 subj = pd.read_excel(subj_file)
