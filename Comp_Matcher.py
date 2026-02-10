@@ -56,14 +56,11 @@ def unique_ok(subject, candidate, chosen_comps, is_hotel):
     def norm(x): return str(x).strip().lower()
     pairs = [(subject, candidate)] + [(c, candidate) for c in chosen_comps]
     for a, b in pairs:
-        # Account
         if norm(a.get("Property Account No", "")) == norm(b.get("Property Account No", "")):
             return False
-        # Owner
         if len(get_prefix_6(a.get("Owner Name/ LLC Name", ""))) >= 4 and \
            get_prefix_6(a.get("Owner Name/ LLC Name", "")) == get_prefix_6(b.get("Owner Name/ LLC Name", "")):
             return False
-        # Hotel-specific uniqueness
         if is_hotel:
             if len(get_prefix_6(a.get("Hotel Name", ""))) >= 4 and \
                get_prefix_6(a.get("Hotel Name", "")) == get_prefix_6(b.get("Hotel Name", "")):
@@ -71,7 +68,6 @@ def unique_ok(subject, candidate, chosen_comps, is_hotel):
             if len(get_prefix_6(a.get("Owner Street Address", ""))) >= 4 and \
                get_prefix_6(a.get("Owner Street Address", "")) == get_prefix_6(b.get("Owner Street Address", "")):
                 return False
-        # Property address
         if len(get_prefix_6(a.get("Property Address", ""))) >= 4 and \
            get_prefix_6(a.get("Property Address", "")) == get_prefix_6(b.get("Property Address", "")):
             return False
@@ -81,7 +77,6 @@ def unique_ok(subject, candidate, chosen_comps, is_hotel):
 # ---------- CLASS RULES ----------
 
 def class_ok_hotel(subj_c, comp_c):
-    """Original hotel class rule."""
     subj_c = int(subj_c)
     comp_c = int(comp_c)
     if subj_c == 8:
@@ -96,7 +91,6 @@ def class_ok_hotel(subj_c, comp_c):
 
 
 def class_ok_other(subj_c, comp_c):
-    """For non-hotel: simple tolerance on class number."""
     try:
         subj_c = int(subj_c)
         comp_c = int(comp_c)
@@ -125,13 +119,9 @@ def find_comps(
     sort_mode,
 ):
     """
-    is_hotel: True = Hotel Property (VPR, Rooms), False = Other Property (VPU, GBA).
-    use_hotel_class_rule: if False, ignore Hotel class rule even for hotels.
-    use_county_match: if True, Same County is used after City.
     sort_mode: 'Distance Priority' or 'VPR/VPU Gap (lower comp value)'.
     """
 
-    # Choose metric names based on property type
     if is_hotel:
         metric_field = "VPR"
         size_field = "Rooms"
@@ -155,7 +145,6 @@ def find_comps(
     for _, crow in src_df.iterrows():
         comp_class = crow.get("Class_Num")
 
-        # ---- CLASS RULES ----
         if is_hotel and use_hotel_class_rule:
             if not class_ok_hotel(subj_class, comp_class):
                 continue
@@ -171,25 +160,18 @@ def find_comps(
         if pd.isna(comp_metric) or comp_metric > subj_metric:
             continue
 
-        # Main metric tolerance
         if not tolerance_ok(subj_metric, comp_metric, max_gap_pct_main):
             continue
-
-        # Value tolerance
         if not tolerance_ok(subj_value, comp_value, max_gap_pct_value):
             continue
-
-        # Size tolerance
         if not tolerance_ok(subj_size, comp_size, max_gap_pct_size):
             continue
 
-        # Distance (for info / strict mode)
         clat, clon = crow.get("lat"), crow.get("lon")
         dist_miles = 999
         if pd.notna(slat) and pd.notna(slon) and pd.notna(clat) and pd.notna(clon):
             dist_miles = haversine(slat, slon, clat, clon)
 
-        # Location priority logic
         match_type = None
         priority = 99
 
@@ -201,7 +183,6 @@ def find_comps(
                     str(crow.get("Property County", "")).strip().lower()
 
         if use_strict_distance:
-            # STRICT MODE: use radius, then ZIP, City, County; else skip
             if is_radius:
                 match_type = f"Within {max_radius_miles} Miles"
                 priority = 1
@@ -215,10 +196,8 @@ def find_comps(
                 match_type = "Same County"
                 priority = 4
             else:
-                # No allowed location match in strict mode
                 continue
         else:
-            # NON-STRICT MODE: IGNORE RADIUS, only ZIP -> City -> County
             if is_zip:
                 match_type = "Same ZIP"
                 priority = 1
@@ -229,7 +208,6 @@ def find_comps(
                 match_type = "Same County"
                 priority = 3
             else:
-                # No location match at all when strict OFF
                 continue
 
         metric_gap = float(subj_metric - comp_metric)
@@ -238,13 +216,9 @@ def find_comps(
             (crow, priority, dist_miles, metric_gap, match_type)
         )
 
-    # Sort according to chosen mode
-    # x = (crow, priority, dist_miles, metric_gap, match_type)
     if sort_mode == "Distance Priority":
-        # Priority -> distance -> bigger gap first
         candidates.sort(key=lambda x: (x[1], x[2], -x[3]))
     else:
-        # Priority -> bigger gap first -> distance
         candidates.sort(key=lambda x: (x[1], -x[3], x[2]))
 
     final_comps = []
@@ -265,7 +239,6 @@ def find_comps(
     return final_comps
 
 
-# Columns to export
 OUTPUT_COLS_HOTEL = [
     "Property Account No", "Hotel Name", "Rooms", "VPR", "Property Address",
     "Property City", "Property County", "Property State", "Property Zip Code",
@@ -297,7 +270,6 @@ def get_val(row, col):
 
 st.set_page_config(page_title="Comp Matcher", layout="wide")
 
-# Simple theming for header / sidebar
 st.markdown(
     """
     <style>
@@ -425,20 +397,12 @@ use_overpaid = st.sidebar.checkbox(
 
 overpaid_base_dim = None
 if use_overpaid:
-    if is_hotel:
-        overpaid_base_dim = st.sidebar.radio(
-            "Use Rooms or GBA?",
-            ["Rooms", "GBA"],
-            index=0,
-            help="Which size dimension to use for overpaid calculation.",
-        )
-    else:
-        overpaid_base_dim = st.sidebar.radio(
-            "Use Units or GBA?",
-            ["GBA"],
-            index=0,
-            help="For now, GBA is used for other property types.",
-        )
+    overpaid_base_dim = st.sidebar.radio(
+        "Use Rooms / Units / GBA?",
+        ["Rooms", "Units", "GBA"],
+        index=0 if is_hotel else 1,
+        help="Hotel: usually Rooms; Apartments: Units; Other properties: GBA.",
+    )
 
     overpaid_pct = st.sidebar.number_input(
         "Overpaid Percentage (%)",
@@ -450,6 +414,7 @@ if use_overpaid:
     ) / 100.0
 else:
     overpaid_pct = 0.0
+    overpaid_base_dim = None
 
 # ---------- FILE UPLOADS ----------
 
@@ -478,7 +443,6 @@ if subj_file is not None and src_file is not None:
                 src.columns = src.columns.str.strip()
 
                 for df in (subj, src):
-                    # Property Account
                     if "Property Account No" in df.columns:
                         df["Property Account No"] = (
                             df["Property Account No"]
@@ -491,7 +455,6 @@ if subj_file is not None and src_file is not None:
                             df["Concat"].astype(str).str.extract(r"(\d+)", expand=False)
                         )
 
-                    # Class_Num
                     if "Hotel class values" in df.columns:
                         df["Class_Num"] = df["Hotel class values"].apply(norm_class)
                     elif "Class" in df.columns:
@@ -499,7 +462,7 @@ if subj_file is not None and src_file is not None:
                     else:
                         df["Class_Num"] = np.nan
 
-                    for c in ["Property Zip Code", "Rooms", "GBA", "VPR", "VPU",
+                    for c in ["Property Zip Code", "Rooms", "Units", "GBA", "VPR", "VPU",
                               "Market Value-2023", "Total Market value-2023", "lat", "lon"]:
                         if c in df.columns:
                             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -509,13 +472,11 @@ if subj_file is not None and src_file is not None:
                             lambda x: -abs(x) if pd.notna(x) else x
                         )
 
-                # Required columns based on property type
                 if is_hotel:
                     required_cols = ["Property Zip Code", "Class_Num", "VPR"]
                 else:
                     required_cols = ["Property Zip Code", "VPU"]
 
-                # --- DETAILED DIAGNOSTICS ---
                 st.subheader("Diagnostics / Hints")
 
                 missing_subj_cols = [c for c in required_cols if c not in subj.columns]
@@ -630,7 +591,16 @@ if subj_file is not None and src_file is not None:
                         if len(comp_metrics) > 0:
                             median_metric = float(pd.Series(comp_metrics).median())
 
-                            subj_dim = srow.get(overpaid_base_dim, 0) if overpaid_base_dim else 0
+                            if overpaid_base_dim:
+                                if overpaid_base_dim == "Rooms":
+                                    subj_dim = srow.get("Rooms", 0)
+                                elif overpaid_base_dim == "Units":
+                                    subj_dim = srow.get("Units", 0)
+                                else:  # GBA
+                                    subj_dim = srow.get("GBA", 0)
+                            else:
+                                subj_dim = 0
+
                             try:
                                 subj_dim = float(subj_dim)
                             except Exception:
