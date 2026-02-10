@@ -653,6 +653,7 @@ else:
 
 # ---------- BUY ME A COFFEE FLOATING BUTTON ----------
 import streamlit.components.v1 as components
+
 components.html(
     """
     <script data-name="BMC-Widget"
@@ -670,6 +671,8 @@ components.html(
     height=0,
     width=0,
 )
+
+
 
 
 
