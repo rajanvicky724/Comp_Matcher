@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 import math
 import io
-import streamlit.components.v1 as components
 
 # ==========================================
 # 1. HELPER FUNCTIONS
@@ -653,7 +652,7 @@ else:
     st.info("Please upload both Subject and Data Source Excel files to begin.")
 
 # ---------- BUY ME A COFFEE FLOATING BUTTON ----------
-
+import streamlit.components.v1 as components
 components.html(
     """
     <script data-name="BMC-Widget"
@@ -671,5 +670,6 @@ components.html(
     height=0,
     width=0,
 )
+
 
 
