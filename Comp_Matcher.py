@@ -401,13 +401,47 @@ if subj_file is not None and src_file is not None:
                             lambda x: -abs(x) if pd.notna(x) else x
                         )
 
+                # Required columns based on property type
                 if is_hotel:
                     required_cols = ["Property Zip Code", "Class_Num", "VPR"]
                 else:
                     required_cols = ["Property Zip Code", "VPU"]
 
-                subj = subj.dropna(subset=[c for c in required_cols if c in subj.columns])
-                src = src.dropna(subset=[c for c in required_cols if c in src.columns])
+                # --- DIAGNOSTIC HINTS BEFORE MATCHING ---
+                st.subheader("Diagnostics / Hints")
+
+                st.write("**Subject columns:**", list(subj.columns))
+                st.write("**Source columns:**", list(src.columns))
+
+                missing_subj_cols = [c for c in required_cols if c not in subj.columns]
+                missing_src_cols = [c for c in required_cols if c not in src.columns]
+
+                if missing_subj_cols:
+                    st.warning(f"Subject file is missing required columns: {missing_subj_cols}")
+                if missing_src_cols:
+                    st.warning(f"Data Source file is missing required columns: {missing_src_cols}")
+
+                before_subj = len(subj)
+                before_src = len(src)
+
+                subj_valid = subj.dropna(subset=[c for c in required_cols if c in subj.columns])
+                src_valid = src.dropna(subset=[c for c in required_cols if c in src.columns])
+
+                st.write(f"Subject rows before filter: {before_subj}, after filter: {len(subj_valid)}")
+                st.write(f"Source rows before filter: {before_src}, after filter: {len(src_valid)}")
+
+                if len(subj_valid) == 0:
+                    st.error(
+                        "All subject rows were dropped. Common reasons:\n"
+                        "- Required columns are blank or non-numeric (e.g., VPR / VPU, Property Zip Code, Class_Num).\n"
+                        "- Column names in Excel do not exactly match expected names."
+                    )
+
+                subj = subj_valid
+                src = src_valid
+
+                if len(subj) == 0 or len(src) == 0:
+                    st.stop()
 
                 if is_hotel:
                     OUTPUT_COLS = OUTPUT_COLS_HOTEL
