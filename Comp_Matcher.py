@@ -274,7 +274,7 @@ st.markdown(
     <style>
     .page-watermark {
         position: fixed;
-        bottom: 10px;
+        bottom: 30px;
         right: 10px;
         color: rgba(0, 0, 0, 0.15);
         font-size: 24px;
@@ -693,6 +693,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 
 
